@@ -86,7 +86,7 @@ namespace Garnet.server
         /// </summary>
         int endReadHead;
 
-        byte* dcurr, dend;
+        internal byte* dcurr, dend;
         bool toDispose;
 
         int opCount;
@@ -394,6 +394,21 @@ namespace Garnet.server
             return readHead;
         }
 
+        /// <summary>
+        /// For testing purposes, call <see cref="INetworkSender.EnterAndGetResponseObject"/> and update state accordingly.
+        /// </summary>
+        internal void EnterAndGetResponseObject()
+        => networkSender.EnterAndGetResponseObject(out dcurr, out dend);
+
+        /// <summary>
+        /// For testing purposes, call <see cref="INetworkSender.ExitAndReturnResponseObject"/> and update state accordingly.
+        /// </summary>
+        internal void ExitAndReturnResponseObject()
+        {
+            networkSender.ExitAndReturnResponseObject();
+            dcurr = dend = (byte*)0;
+        }
+
         internal void SetTransactionMode(bool enable)
             => txnManager.state = enable ? TxnState.Running : TxnState.None;
 
@@ -623,6 +638,11 @@ namespace Garnet.server
                 RespCommand.ZREVRANGEBYLEX => SortedSetRange(cmd, ref storageApi),
                 RespCommand.ZREVRANGEBYSCORE => SortedSetRange(cmd, ref storageApi),
                 RespCommand.ZSCAN => ObjectScan(GarnetObjectType.SortedSet, ref storageApi),
+                RespCommand.ZINTER => SortedSetIntersect(ref storageApi),
+                RespCommand.ZINTERCARD => SortedSetIntersectLength(ref storageApi),
+                RespCommand.ZINTERSTORE => SortedSetIntersectStore(ref storageApi),
+                RespCommand.ZUNION => SortedSetUnion(ref storageApi),
+                RespCommand.ZUNIONSTORE => SortedSetUnionStore(ref storageApi),
                 //SortedSet for Geo Commands
                 RespCommand.GEOADD => GeoAdd(ref storageApi),
                 RespCommand.GEOHASH => GeoCommands(cmd, ref storageApi),
@@ -746,9 +766,20 @@ namespace Garnet.server
                 RespCommand.SCAN => NetworkSCAN(ref storageApi),
                 RespCommand.TYPE => NetworkTYPE(ref storageApi),
                 // Script Commands
-                RespCommand.SCRIPT => TrySCRIPT(),
+                RespCommand.SCRIPT_EXISTS => NetworkScriptExists(),
+                RespCommand.SCRIPT_FLUSH => NetworkScriptFlush(),
+                RespCommand.SCRIPT_LOAD => NetworkScriptLoad(),
+
                 RespCommand.EVAL => TryEVAL(),
                 RespCommand.EVALSHA => TryEVALSHA(),
+                // Slow commands
+                RespCommand.LCS => NetworkLCS(ref storageApi),
+
+                // Etag related commands
+                RespCommand.GETWITHETAG => NetworkGETWITHETAG(ref storageApi),
+                RespCommand.GETIFNOTMATCH => NetworkGETIFNOTMATCH(ref storageApi),
+                RespCommand.SETIFMATCH => NetworkSETIFMATCH(ref storageApi),
+
                 _ => Process(command)
             };
 
@@ -776,8 +807,8 @@ namespace Garnet.server
                 // Perform the operation
                 TryTransactionProc(currentCustomTransaction.id,
                     customCommandManagerSession
-                        .GetCustomTransactionProcedure(currentCustomTransaction.id, this, txnManager, scratchBufferManager)
-                        .Item1);
+                        .GetCustomTransactionProcedure(currentCustomTransaction.id, this, txnManager,
+                            scratchBufferManager, out _));
                 currentCustomTransaction = null;
                 return true;
             }
@@ -816,8 +847,8 @@ namespace Garnet.server
             }
 
             // Perform the operation
-            TryCustomRawStringCommand(currentCustomRawStringCommand.GetRespCommand(),
-                currentCustomRawStringCommand.expirationTicks, currentCustomRawStringCommand.type, ref storageApi);
+            var cmd = customCommandManagerSession.GetCustomRespCommand(currentCustomRawStringCommand.id);
+            TryCustomRawStringCommand(cmd, currentCustomRawStringCommand.expirationTicks, currentCustomRawStringCommand.type, ref storageApi);
             currentCustomRawStringCommand = null;
             return true;
         }
@@ -832,7 +863,8 @@ namespace Garnet.server
             }
 
             // Perform the operation
-            TryCustomObjectCommand(currentCustomObjectCommand.GetObjectType(), currentCustomObjectCommand.subid,
+            var type = customCommandManagerSession.GetCustomGarnetObjectType(currentCustomObjectCommand.id);
+            TryCustomObjectCommand(type, currentCustomObjectCommand.subid,
                 currentCustomObjectCommand.type, ref storageApi);
             currentCustomObjectCommand = null;
             return true;
@@ -840,7 +872,7 @@ namespace Garnet.server
 
         private bool IsCommandArityValid(string cmdName, int count)
         {
-            if (storeWrapper.customCommandManager.CustomCommandsInfo.TryGetValue(cmdName, out var cmdInfo))
+            if (storeWrapper.customCommandManager.customCommandsInfo.TryGetValue(cmdName, out var cmdInfo))
             {
                 Debug.Assert(cmdInfo != null, "Custom command info should not be null");
                 if ((cmdInfo.Arity > 0 && count != cmdInfo.Arity - 1) ||
@@ -967,7 +999,7 @@ namespace Garnet.server
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void SendAndReset()
+        internal void SendAndReset()
         {
             byte* d = networkSender.GetResponseObjectHead();
             if ((int)(dcurr - d) > 0)

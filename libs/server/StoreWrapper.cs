@@ -99,8 +99,10 @@ namespace Garnet.server
         internal readonly string run_id;
         private SingleWriterMultiReaderLock _checkpointTaskLock;
 
-        // Lua script cache
-        public readonly ConcurrentDictionary<byte[], byte[]> storeScriptCache;
+        /// <summary>
+        /// Lua script cache
+        /// </summary>
+        public readonly ConcurrentDictionary<ScriptHashKey, byte[]> storeScriptCache;
 
         public readonly TimeSpan loggingFrequncy;
 
@@ -153,7 +155,7 @@ namespace Garnet.server
 
             // Initialize store scripting cache
             if (serverOptions.EnableLua)
-                this.storeScriptCache = new ConcurrentDictionary<byte[], byte[]>(new ByteArrayComparer());
+                this.storeScriptCache = [];
 
             if (accessControlList == null)
             {
@@ -217,7 +219,7 @@ namespace Garnet.server
         }
 
         internal FunctionsState CreateFunctionsState()
-            => new(appendOnlyFile, versionMap, customCommandManager.rawStringCommandMap, customCommandManager.objectCommandMap, null, objectStoreSizeTracker, GarnetObjectSerializer);
+            => new(appendOnlyFile, versionMap, customCommandManager, null, objectStoreSizeTracker, GarnetObjectSerializer);
 
         internal void Recover()
         {

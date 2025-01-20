@@ -8,6 +8,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography.X509Certificates;
 using CommandLine;
 using Garnet.server;
@@ -332,12 +333,20 @@ namespace Garnet
         public string FileLogger { get; set; }
 
         [IntRangeValidation(0, int.MaxValue)]
-        [Option("minthreads", Required = false, HelpText = "Minimum worker and completion threads in thread pool, 0 uses the system default.")]
+        [Option("minthreads", Required = false, HelpText = "Minimum worker threads in thread pool, 0 uses the system default.")]
         public int ThreadPoolMinThreads { get; set; }
 
         [IntRangeValidation(0, int.MaxValue)]
-        [Option("maxthreads", Required = false, HelpText = "Maximum worker and completion threads in thread pool, 0 uses the system default.")]
+        [Option("maxthreads", Required = false, HelpText = "Maximum worker threads in thread pool, 0 uses the system default.")]
         public int ThreadPoolMaxThreads { get; set; }
+
+        [IntRangeValidation(0, int.MaxValue)]
+        [Option("miniothreads", Required = false, HelpText = "Minimum IO completion threads in thread pool, 0 uses the system default.")]
+        public int ThreadPoolMinIOCompletionThreads { get; set; }
+
+        [IntRangeValidation(0, int.MaxValue)]
+        [Option("maxiothreads", Required = false, HelpText = "Maximum IO completion threads in thread pool, 0 uses the system default.")]
+        public int ThreadPoolMaxIOCompletionThreads { get; set; }
 
         [IntRangeValidation(-1, int.MaxValue)]
         [Option("network-connection-limit", Required = false, Default = -1, HelpText = "Maximum number of simultaneously active network connections.")]
@@ -499,6 +508,14 @@ namespace Garnet
         [OptionValidation]
         [Option("fail-on-recovery-error", Default = false, Required = false, HelpText = "Server bootup should fail if errors happen during bootup of AOF and checkpointing")]
         public bool? FailOnRecoveryError { get; set; }
+
+        [Option("lua-memory-management-mode", Default = LuaMemoryManagementMode.Native, Required = false, HelpText = "Memory management mode for Lua scripts, must be set to LimittedNative or Managed to impose script limits")]
+        public LuaMemoryManagementMode LuaMemoryManagementMode { get; set; }
+
+        [MemorySizeValidation(false)]
+        [ForbiddenWithOption(nameof(LuaMemoryManagementMode), nameof(LuaMemoryManagementMode.Native))]
+        [Option("lua-script-memory-limit", Default = null, HelpText = "Memory limit for a Lua instances while running a script, lua-memory-management-mode must be set to something other than Native to use this flag")]
+        public string LuaScriptMemoryLimit { get; set; }
 
         /// <summary>
         /// This property contains all arguments that were not parsed by the command line argument parser
@@ -680,6 +697,8 @@ namespace Garnet
                 QuietMode = QuietMode.GetValueOrDefault(),
                 ThreadPoolMinThreads = ThreadPoolMinThreads,
                 ThreadPoolMaxThreads = ThreadPoolMaxThreads,
+                ThreadPoolMinIOCompletionThreads = ThreadPoolMinIOCompletionThreads,
+                ThreadPoolMaxIOCompletionThreads = ThreadPoolMaxIOCompletionThreads,
                 NetworkConnectionLimit = NetworkConnectionLimit,
                 DeviceFactoryCreator = useAzureStorage
                     ? () => new AzureStorageNamedDeviceFactory(AzureStorageConnectionString, logger)
@@ -708,7 +727,8 @@ namespace Garnet
                 IndexResizeFrequencySecs = IndexResizeFrequencySecs,
                 IndexResizeThreshold = IndexResizeThreshold,
                 LoadModuleCS = LoadModuleCS,
-                FailOnRecoveryError = FailOnRecoveryError.GetValueOrDefault()
+                FailOnRecoveryError = FailOnRecoveryError.GetValueOrDefault(),
+                LuaOptions = EnableLua.GetValueOrDefault() ? new LuaOptions(LuaMemoryManagementMode, LuaScriptMemoryLimit, logger) : null,
             };
         }
 
