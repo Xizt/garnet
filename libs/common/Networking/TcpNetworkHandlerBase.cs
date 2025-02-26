@@ -145,7 +145,7 @@ namespace Garnet.common
                 socket.Shutdown(SocketShutdown.Both);
                 socket.Close();
             }
-            
+
             socket.Dispose();
         }
 
