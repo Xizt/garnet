@@ -11,6 +11,7 @@ using System.Net.Sockets;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography.X509Certificates;
+using System.Threading;
 using CommandLine;
 using Garnet.server;
 using Garnet.server.Auth.Aad;
@@ -404,8 +405,20 @@ namespace Garnet
         public bool? MainMemoryReplication { get; set; }
 
         [OptionValidation]
+        [Option("fast-aof-truncate", Required = false, HelpText = "Use fast-aof-truncate replication model.")]
+        public bool? FastAofTruncate { get; set; }
+
+        [OptionValidation]
         [Option("on-demand-checkpoint", Required = false, HelpText = "Used with main-memory replication model. Take on demand checkpoint to avoid missing data when attaching")]
         public bool? OnDemandCheckpoint { get; set; }
+
+        [OptionValidation]
+        [Option("repl-diskless-sync", Required = false, HelpText = "Whether diskless replication is enabled or not.")]
+        public bool? ReplicaDisklessSync { get; set; }
+
+        [IntRangeValidation(0, int.MaxValue)]
+        [Option("repl-diskless-sync-delay", Required = false, Default = 5, HelpText = "Delay in diskless replication sync in seconds. =0: Immediately start diskless replication sync.")]
+        public int ReplicaDisklessSyncDelay { get; set; }
 
         [OptionValidation]
         [Option("aof-null-device", Required = false, HelpText = "With main-memory replication, use null device for AOF. Ensures no disk IO, but can cause data loss during replication.")]
@@ -537,6 +550,10 @@ namespace Garnet
         [ForbiddenWithOption(nameof(LuaMemoryManagementMode), nameof(LuaMemoryManagementMode.Native))]
         [Option("lua-script-memory-limit", Default = null, HelpText = "Memory limit for a Lua instances while running a script, lua-memory-management-mode must be set to something other than Native to use this flag")]
         public string LuaScriptMemoryLimit { get; set; }
+
+        [IntRangeValidation(10, int.MaxValue, isRequired: false)]
+        [Option("lua-script-timeout", Default = null, Required = false, HelpText = "Timeout for a Lua instance while running a script, specified in positive milliseconds (0 = disabled)")]
+        public int LuaScriptTimeoutMs { get; set; }
 
         [FilePathValidation(false, true, false)]
         [Option("unixsocket", Required = false, HelpText = "Unix socket address path to bind server to")]
@@ -760,14 +777,16 @@ namespace Garnet
                 ThreadPoolMaxIOCompletionThreads = ThreadPoolMaxIOCompletionThreads,
                 NetworkConnectionLimit = NetworkConnectionLimit,
                 DeviceFactoryCreator = useAzureStorage
-                    ? () => new AzureStorageNamedDeviceFactory(AzureStorageConnectionString, logger)
-                    : () => new LocalStorageNamedDeviceFactory(useNativeDeviceLinux: UseNativeDeviceLinux.GetValueOrDefault(), logger: logger),
+                    ? new AzureStorageNamedDeviceFactoryCreator(AzureStorageConnectionString, logger)
+                    : new LocalStorageNamedDeviceFactoryCreator(useNativeDeviceLinux: UseNativeDeviceLinux.GetValueOrDefault(), logger: logger),
                 CheckpointThrottleFlushDelayMs = CheckpointThrottleFlushDelayMs,
                 EnableScatterGatherGet = EnableScatterGatherGet.GetValueOrDefault(),
                 ReplicaSyncDelayMs = ReplicaSyncDelayMs,
                 ReplicationOffsetMaxLag = ReplicationOffsetMaxLag,
-                MainMemoryReplication = MainMemoryReplication.GetValueOrDefault(),
+                FastAofTruncate = GetFastAofTruncate(logger),
                 OnDemandCheckpoint = OnDemandCheckpoint.GetValueOrDefault(),
+                ReplicaDisklessSync = ReplicaDisklessSync.GetValueOrDefault(),
+                ReplicaDisklessSyncDelay = ReplicaDisklessSyncDelay,
                 UseAofNullDevice = UseAofNullDevice.GetValueOrDefault(),
                 ClusterUsername = ClusterUsername,
                 ClusterPassword = ClusterPassword,
@@ -789,7 +808,7 @@ namespace Garnet
                 LoadModuleCS = LoadModuleCS,
                 FailOnRecoveryError = FailOnRecoveryError.GetValueOrDefault(),
                 SkipRDBRestoreChecksumValidation = SkipRDBRestoreChecksumValidation.GetValueOrDefault(),
-                LuaOptions = EnableLua.GetValueOrDefault() ? new LuaOptions(LuaMemoryManagementMode, LuaScriptMemoryLimit, logger) : null,
+                LuaOptions = EnableLua.GetValueOrDefault() ? new LuaOptions(LuaMemoryManagementMode, LuaScriptMemoryLimit, LuaScriptTimeoutMs == 0 ? Timeout.InfiniteTimeSpan : TimeSpan.FromMilliseconds(LuaScriptTimeoutMs), logger) : null,
                 UnixSocketPath = UnixSocketPath,
                 UnixSocketPermission = unixSocketPermissions
             };
@@ -814,6 +833,16 @@ namespace Garnet
                     logger?.LogError("Unsupported authentication mode: {mode}", AuthenticationMode);
                     throw new Exception($"Authentication mode {AuthenticationMode} is not supported.");
             }
+        }
+
+        public bool GetFastAofTruncate(ILogger logger = null)
+        {
+            if (MainMemoryReplication.GetValueOrDefault())
+            {
+                logger?.LogError("--main-memory-replication is deprecated. Use --fast-aof-truncate instead.");
+                return true;
+            }
+            return FastAofTruncate.GetValueOrDefault();
         }
     }
 
