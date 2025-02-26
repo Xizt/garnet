@@ -134,7 +134,7 @@ namespace Garnet.server
                     break;
 
                 case RespCommand.GETBIT:
-                    var offset = input.parseState.GetLong(0);
+                    var offset = input.arg1;
                     var oldValSet = BitmapManager.GetBit(offset, value.ToPointer() + functionsState.etagState.etagSkippedStart, value.Length - functionsState.etagState.etagSkippedStart);
                     if (oldValSet == 0)
                         CopyDefaultResp(CmdStrings.RESP_RETURN_VAL_0, ref dst);
@@ -184,8 +184,14 @@ namespace Garnet.server
                         }
                     }
 
-                    var pos = BitmapManager.BitPosDriver(bpSetVal, bpStartOffset, bpEndOffset, bpOffsetType,
-                        value.ToPointer() + functionsState.etagState.etagSkippedStart, value.Length - functionsState.etagState.etagSkippedStart);
+                    var pos = BitmapManager.BitPosDriver(
+                        input: value.ToPointer() + functionsState.etagState.etagSkippedStart,
+                        inputLen: value.Length - functionsState.etagState.etagSkippedStart,
+                        startOffset: bpStartOffset,
+                        endOffset: bpEndOffset,
+                        searchFor: bpSetVal,
+                        offsetType: bpOffsetType
+                        );
                     *(long*)dst.SpanByte.ToPointer() = pos;
                     CopyRespNumber(pos, ref dst);
                     break;
@@ -657,7 +663,7 @@ namespace Garnet.server
             int desiredLength = 4;
             ReadOnlySpan<byte> etagTruncatedVal;
             // get etag to write, default etag 0 for when no etag
-            long etag = hasEtagInVal ? value.GetEtagInPayload() : EtagConstants.BaseEtag;
+            long etag = hasEtagInVal ? value.GetEtagInPayload() : EtagConstants.NoETag;
             // remove the length of the ETAG
             var etagAccountedValueLength = valueLength - etagSkippedStart;
             if (hasEtagInVal)
