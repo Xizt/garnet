@@ -140,8 +140,12 @@ namespace Garnet.common
         /// <inheritdoc />
         public override void Dispose()
         {
-            socket.Shutdown(SocketShutdown.Both);
-            socket.Close();
+            if (socket.Connected)
+            {
+                socket.Shutdown(SocketShutdown.Both);
+                socket.Close();
+            }
+            
             socket.Dispose();
         }
 
